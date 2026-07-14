@@ -52,6 +52,7 @@ __global__ void postprocess_kernal(const float* __restrict__ cls_input,
                                         float *box_input,
                                         const float* __restrict__ dir_input,
                                         const float* __restrict__ anchors,
+                                        const int* __restrict__ anchors_per_class,
                                         const float* __restrict__ anchor_bottom_heights,
                                         float *bndbox_output,
                                         float *score_output,
@@ -64,6 +65,7 @@ __global__ void postprocess_kernal(const float* __restrict__ cls_input,
                                         const int feature_y_size,
                                         const int num_anchors,
                                         const int num_classes,
+                                        const int len_per_anchor,
                                         const int num_box_values,
                                         const float score_thresh,
                                         const float dir_offset)
@@ -95,8 +97,15 @@ __global__ void postprocess_kernal(const float* __restrict__ cls_input,
   {
     int box_offset = loc_index * num_anchors * num_box_values + ith_anchor * num_box_values;
     int dir_cls_offset = loc_index * num_anchors * 2 + ith_anchor * 2;
-    const float *anchor_ptr = anchors + ith_anchor * 4;
-    float z_offset = anchor_ptr[2] / 2 + anchor_bottom_heights[ith_anchor / 2];
+    int anchor_class_id = 0;
+    int class_anchor_start = 0;
+    while (anchor_class_id + 1 < num_classes &&
+                 ith_anchor >= class_anchor_start + anchors_per_class[anchor_class_id]) {
+        class_anchor_start += anchors_per_class[anchor_class_id];
+        ++anchor_class_id;
+    }
+    const float *anchor_ptr = anchors + ith_anchor * len_per_anchor;
+    float z_offset = anchor_ptr[2] / 2 + anchor_bottom_heights[anchor_class_id];
     float anchor[7] = {x_offset, y_offset, z_offset, anchor_ptr[0], anchor_ptr[1], anchor_ptr[2], anchor_ptr[3]};
     float *box_encodings = box_input + box_offset;
 
@@ -143,6 +152,7 @@ cudaError_t postprocess_launch(const float* __restrict__ cls_input,
                       float *box_input,
                       const float* __restrict__ dir_input,
                       const float* __restrict__ anchors,
+                      const int* __restrict__ anchors_per_class,
                       const float* __restrict__ anchor_bottom_heights,
                       float *bndbox_output,
                       float *score_output,
@@ -155,6 +165,7 @@ cudaError_t postprocess_launch(const float* __restrict__ cls_input,
                       const int feature_y_size,
                       const int num_anchors,
                       const int num_classes,
+                      const int len_per_anchor,
                       const int num_box_values,
                       const float score_thresh,
                       const float dir_offset,
@@ -169,6 +180,7 @@ cudaError_t postprocess_launch(const float* __restrict__ cls_input,
                  box_input,
                  dir_input,
                  anchors,
+                 anchors_per_class,
                  anchor_bottom_heights,
                  bndbox_output,
                  score_output,
@@ -181,6 +193,7 @@ cudaError_t postprocess_launch(const float* __restrict__ cls_input,
                  feature_y_size,
                  num_anchors,
                  num_classes,
+                 len_per_anchor,
                  num_box_values,
                  score_thresh,
                  dir_offset);
@@ -417,9 +430,10 @@ public:
         const size_t bndbox_size  = align256(det_num_ * 9 * sizeof(float));
         const size_t score_size   = align256(det_num_ * sizeof(float));
         const size_t anchors_size = align256(param_.num_anchors * param_.len_per_anchor * sizeof(float));
+        const size_t apc_size     = align256(param_.num_classes * sizeof(int));
         const size_t abh_size     = align256(param_.num_classes * sizeof(float));
         const size_t counter_size = align256(sizeof(int));
-        const size_t workspace_size = bndbox_size + score_size + anchors_size + abh_size + counter_size;
+        const size_t workspace_size = bndbox_size + score_size + anchors_size + apc_size + abh_size + counter_size;
 
         checkRuntime(cudaMalloc(&workspace_, workspace_size));
         checkRuntime(cudaMemset(workspace_, 0, workspace_size));
@@ -431,6 +445,8 @@ public:
         base += score_size;
         anchors_              = reinterpret_cast<float*>(base); 
         base += anchors_size;
+        anchors_per_class_     = reinterpret_cast<int*>(base);
+        base += apc_size;
         anchor_bottom_heights_ = reinterpret_cast<float*>(base); 
         base += abh_size;
         object_counter_       = reinterpret_cast<int*>(base);
@@ -439,8 +455,15 @@ public:
 
         checkRuntime(cudaMallocHost(reinterpret_cast<void**>(&h_bndbox_), det_num_ * 9 * sizeof(float)));
         
-        checkRuntime(cudaMemcpy(anchors_, param_.anchors, param_.num_anchors * param_.len_per_anchor * sizeof(float), cudaMemcpyDefault));
-        checkRuntime(cudaMemcpy(anchor_bottom_heights_, &param_.anchor_bottom_heights, param_.num_classes * sizeof(float), cudaMemcpyDefault));
+        checkRuntime(cudaMemcpy(anchors_, param_.anchors.data(), param_.num_anchors * param_.len_per_anchor * sizeof(float), cudaMemcpyDefault));
+        checkRuntime(cudaMemcpy(anchors_per_class_, param_.anchors_per_class.data(), param_.num_classes * sizeof(int), cudaMemcpyDefault));
+        checkRuntime(cudaMemcpy(anchor_bottom_heights_, param_.anchor_bottom_heights.data(), param_.num_classes * sizeof(float), cudaMemcpyDefault));
+
+        std::cout << "PostProcess anchors_per_class=[";
+        for (int i = 0; i < param_.num_classes; ++i) {
+            std::cout << param_.anchors_per_class[i] << (i + 1 < param_.num_classes ? "," : "");
+        }
+        std::cout << "]" << std::endl;
 
         static constexpr unsigned int NMS_PREINIT_DET = 256u; // preallocate for this many detections post-score-filtering; will grow if needed at runtime, but never shrink
         const size_t preinit_col_blocks = (NMS_PREINIT_DET + NMS_THREADS_PER_BLOCK - 1) / NMS_THREADS_PER_BLOCK;
@@ -459,6 +482,7 @@ public:
         std::cout << "    bndbox:              " << inMB(bndbox_size) << " MB\t@ " << static_cast<const void*>(bndbox_) << std::endl;
         std::cout << "    score:               " << inMB(score_size) << " MB\t@ " << static_cast<const void*>(score_) << std::endl;
         std::cout << "    anchors:             " << inMB(anchors_size) << " MB\t@ " << static_cast<const void*>(anchors_) << std::endl;
+        std::cout << "    anchors_per_class:   " << inMB(apc_size) << " MB\t@ " << static_cast<const void*>(anchors_per_class_) << std::endl;
         std::cout << "    anchor_bottom_heights:" << inMB(abh_size) << " MB\t@ " << static_cast<const void*>(anchor_bottom_heights_) << std::endl;
         std::cout << "    object_counter:      " << inMB(counter_size) << " MB\t@ " << static_cast<const void*>(object_counter_) << std::endl;
         std::cout << "    WORKSPACE:           " << inMB(workspace_size) << " MB\t@ " << static_cast<const void*>(workspace_) << std::endl;
@@ -477,6 +501,7 @@ public:
                                         (float *)box,
                                         (float *)dir,
                                         anchors_,
+                                        anchors_per_class_,
                                         anchor_bottom_heights_,
                                         bndbox_,
                                         score_,
@@ -489,6 +514,7 @@ public:
                                         param_.feature_size.y,
                                         param_.num_anchors,
                                         param_.num_classes,
+                                        param_.len_per_anchor,
                                         param_.num_box_values,
                                         param_.score_thresh,
                                         param_.dir_offset,
@@ -554,6 +580,7 @@ private:
     PostProcessParameter param_;
     void*        workspace_            = nullptr;
     float       *anchors_              = nullptr;
+    int         *anchors_per_class_     = nullptr;
     float       *anchor_bottom_heights_ = nullptr;
     int         *object_counter_       = nullptr;
 

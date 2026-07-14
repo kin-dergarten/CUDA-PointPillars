@@ -91,8 +91,19 @@ public:
     virtual float* cls() override { return cls_; }
     virtual float* box() override { return box_; }
     virtual float* dir() override { return dir_; }
+    virtual int cls_numel() const override { return numel(cls_dims_); }
+    virtual int box_numel() const override { return numel(box_dims_); }
+    virtual int dir_numel() const override { return numel(dir_dims_); }
+    virtual nvtype::Int2 feature_size() const override {
+        // The PointPillar head exports NHWC tensors: [1, H, W, C].
+        return nvtype::Int2(cls_dims_[2], cls_dims_[1]);
+    }
 
 private:
+    static int numel(const std::vector<int>& dims) {
+        return std::accumulate(dims.begin(), dims.end(), 1, std::multiplies<int>());
+    }
+
     std::shared_ptr<TensorRT::Engine> engine_;
     void*  workspace_ = nullptr;
     float *cls_ = nullptr;

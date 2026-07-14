@@ -40,6 +40,10 @@ class Backbone {
     virtual float* cls() = 0;
     virtual float* box() = 0;
     virtual float* dir() = 0;
+    virtual int cls_numel() const = 0;
+    virtual int box_numel() const = 0;
+    virtual int dir_numel() const = 0;
+    virtual nvtype::Int2 feature_size() const = 0;
 
     virtual void print() = 0;
 };

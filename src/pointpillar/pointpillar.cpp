@@ -57,7 +57,37 @@ public:
         checkRuntime(cudaDeviceSynchronize());
         printf("Loaded lidar backbone & head.\n");
 
-        lidar_postprocess_ = create_postprocess(param.lidar_post);
+        PostProcessParameter postprocess_param = param.lidar_post;
+        const nvtype::Int2 model_feature_size = lidar_backbone_->feature_size();
+        postprocess_param.feature_size = model_feature_size;
+        const int feature_cells = postprocess_param.feature_size.x * postprocess_param.feature_size.y;
+        const int expected_cls = feature_cells * postprocess_param.num_anchors * postprocess_param.num_classes;
+        const int expected_box = feature_cells * postprocess_param.num_anchors * postprocess_param.num_box_values;
+        const int expected_dir = feature_cells * postprocess_param.num_anchors * 2;
+
+        printf(
+            "[PointPillar] backbone output vs. config:\n"
+            "  feature_size (W x H): %d x %d (%d cells)\n"
+            "  num_classes=%d, num_anchors=%d, num_box_values=%d\n"
+            "  cls: %d (expected %d)  box: %d (expected %d)  dir: %d (expected %d)\n",
+            postprocess_param.feature_size.x, postprocess_param.feature_size.y, feature_cells,
+            postprocess_param.num_classes, postprocess_param.num_anchors, postprocess_param.num_box_values,
+            lidar_backbone_->cls_numel(), expected_cls,
+            lidar_backbone_->box_numel(), expected_box,
+            lidar_backbone_->dir_numel(), expected_dir);
+
+        if (lidar_backbone_->cls_numel() != expected_cls ||
+            lidar_backbone_->box_numel() != expected_box ||
+            lidar_backbone_->dir_numel() != expected_dir) {
+            printf(
+                "PointPillar output/config mismatch: cls %d (expected %d), box %d (expected %d), dir %d (expected %d).\n",
+                lidar_backbone_->cls_numel(), expected_cls,
+                lidar_backbone_->box_numel(), expected_box,
+                lidar_backbone_->dir_numel(), expected_dir);
+            return false;
+        }
+
+        lidar_postprocess_ = create_postprocess(postprocess_param);
         if (lidar_postprocess_ == nullptr) {
             printf("Failed to create lidar postprocess.\n");
             return false;
