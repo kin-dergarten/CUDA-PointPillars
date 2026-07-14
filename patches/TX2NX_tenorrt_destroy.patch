@@ -1,0 +1,13 @@
+diff --git a/src/common/tensorrt.cpp b/src/common/tensorrt.cpp
+index 493aead..5992796 100644
+--- a/src/common/tensorrt.cpp
++++ b/src/common/tensorrt.cpp
+@@ -98,7 +98,7 @@ static const char *data_type_string(nvinfer1::DataType dt) {
+ 
+ template <typename _T>
+ static void destroy_pointer(_T *ptr) {
+-  if (ptr) delete ptr;
++  if (ptr) ptr->destroy();
+ }
+ 
+ class __native_engine_context {

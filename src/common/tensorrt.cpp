@@ -85,7 +85,7 @@ static const char *data_type_string(nvinfer1::DataType dt) {
 
 template <typename _T>
 static void destroy_pointer(_T *ptr) {
-  if (ptr) delete ptr;
+  if (ptr) ptr->destroy();
 }
 
 class __native_engine_context {

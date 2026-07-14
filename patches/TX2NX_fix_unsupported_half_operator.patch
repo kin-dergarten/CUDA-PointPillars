@@ -1,0 +1,13 @@
+diff --git a/src/common/tensor.cu b/src/common/tensor.cu
+index c51256a..6029bc3 100644
+--- a/src/common/tensor.cu
++++ b/src/common/tensor.cu
+@@ -132,7 +132,7 @@ static void arange_kernel_host(size_t num, _T* pdata) {
+ 
+ template <>
+ void arange_kernel_host<half>(size_t num, half* pdata) {
+-  for (size_t index = 0; index < num; ++index) pdata[index] = half((int)index);
++  for (size_t index = 0; index < num; ++index) pdata[index] = __float2half(static_cast<float>(index));
+ }
+ 
+ template <typename _AData, typename _BData>
