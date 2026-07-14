@@ -1,0 +1,70 @@
+diff --git a/src/common/tensorrt.cpp b/src/common/tensorrt.cpp
+index 493aead..f3db063 100644
+--- a/src/common/tensorrt.cpp
++++ b/src/common/tensorrt.cpp
+@@ -24,10 +24,13 @@
+ #include "tensorrt.hpp"
+ 
+ #include <cuda_runtime.h>
++#include <fcntl.h>
+ #include <string.h>
++#include <sys/mman.h>
++#include <sys/stat.h>
++#include <unistd.h>
+ 
+ #include <algorithm>
+-#include <fstream>
+ #include <iostream>
+ #include <numeric>
+ #include <unordered_map>
+@@ -60,23 +63,7 @@ static std::string format_shape(const nvinfer1::Dims &shape) {
+   return buf;
+ }
+ 
+-static std::vector<uint8_t> load_file(const std::string &file) {
+-  std::ifstream in(file, std::ios::in | std::ios::binary);
+-  if (!in.is_open()) return {};
+ 
+-  in.seekg(0, std::ios::end);
+-  size_t length = in.tellg();
+-
+-  std::vector<uint8_t> data;
+-  if (length > 0) {
+-    in.seekg(0, std::ios::beg);
+-    data.resize(length);
+-
+-    in.read((char *)&data[0], length);
+-  }
+-  in.close();
+-  return data;
+-}
+ 
+ static const char *data_type_string(nvinfer1::DataType dt) {
+   switch (dt) {
+@@ -166,12 +153,23 @@ class EngineImplement : public Engine {
+   }
+ 
+   bool load(const std::string &file) {
+-    auto data = load_file(file);
+-    if (data.empty()) {
++    int fd = ::open(file.c_str(), O_RDONLY);
++    struct stat st;
++    if (fd < 0 || ::fstat(fd, &st) != 0 || st.st_size == 0) {
+       printf("An empty file has been loaded. Please confirm your file path: %s\n", file.c_str());
++      if (fd >= 0) ::close(fd);
++      return false;
++    }
++    void *mapped = ::mmap(nullptr, static_cast<size_t>(st.st_size), PROT_READ, MAP_SHARED, fd, 0);
++    ::close(fd);
++    if (mapped == MAP_FAILED) {
++      printf("Failed to mmap engine file: %s\n", file.c_str());
+       return false;
+     }
+-    return this->construct(data.data(), data.size(), file.c_str());
++    ::madvise(mapped, static_cast<size_t>(st.st_size), MADV_SEQUENTIAL);
++    bool ok = this->construct(mapped, static_cast<size_t>(st.st_size), file.c_str());
++    ::munmap(mapped, static_cast<size_t>(st.st_size));
++    return ok;
+   }
+ 
+   void setup() {

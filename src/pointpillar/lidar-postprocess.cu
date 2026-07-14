@@ -26,6 +26,7 @@
 #include <thrust/device_ptr.h>
 
 #include <algorithm>
+#include <cstring>
 #include <math.h>
 
 #include "common/check.hpp"
@@ -42,15 +43,16 @@ typedef struct {
   float val[DET_CHANNEL];
 } combined_float;
 
-#define DIVUP(x, y) (x + y - 1) / y
+// DIVUP with full parentheses so operator precedence never causes overflow
+#define DIVUP(x, y) (((x) + (y) - 1) / (y))
 
 __device__ float sigmoid(const float x) { return 1.0f / (1.0f + expf(-x)); }
 
-__global__ void postprocess_kernal(const float *cls_input,
+__global__ void postprocess_kernal(const float* __restrict__ cls_input,
                                         float *box_input,
-                                        const float *dir_input,
-                                        float *anchors,
-                                        float *anchor_bottom_heights,
+                                        const float* __restrict__ dir_input,
+                                        const float* __restrict__ anchors,
+                                        const float* __restrict__ anchor_bottom_heights,
                                         float *bndbox_output,
                                         float *score_output,
                                         int *object_counter,
@@ -93,7 +95,7 @@ __global__ void postprocess_kernal(const float *cls_input,
   {
     int box_offset = loc_index * num_anchors * num_box_values + ith_anchor * num_box_values;
     int dir_cls_offset = loc_index * num_anchors * 2 + ith_anchor * 2;
-    float *anchor_ptr = anchors + ith_anchor * 4;
+    const float *anchor_ptr = anchors + ith_anchor * 4;
     float z_offset = anchor_ptr[2] / 2 + anchor_bottom_heights[ith_anchor / 2];
     float anchor[7] = {x_offset, y_offset, z_offset, anchor_ptr[0], anchor_ptr[1], anchor_ptr[2], anchor_ptr[3]};
     float *box_encodings = box_input + box_offset;
@@ -116,9 +118,10 @@ __global__ void postprocess_kernal(const float *cls_input,
 
     float yaw;
     int dir_label = dir_input[dir_cls_offset] > dir_input[dir_cls_offset + 1] ? 0 : 1;
-    float period = 2 * M_PI / 2;
+    // period = π; use float constant and floorf to stay in FP32 throughout the kernel
+    constexpr float period = static_cast<float>(M_PI);
     float val = box_input[box_offset + 6] - dir_offset;
-    float dir_rot = val - floor(val / (period + 1e-8) + 0.f) * period;
+    float dir_rot = val - floorf(val / period) * period;
     yaw = dir_rot + dir_offset + period * dir_label;
 
     int resCount = (int)atomicAdd(object_counter, 1);
@@ -130,17 +133,17 @@ __global__ void postprocess_kernal(const float *cls_input,
     data[4] = box_input[box_offset + 4];
     data[5] = box_input[box_offset + 5];
     data[6] = yaw;
-    *(int *)&data[7] = cls_id;
+    data[7] = __int_as_float(cls_id);
     data[8] = max_score;
     score_output[resCount] = max_score;
   }
 }
 
-cudaError_t postprocess_launch(const float *cls_input,
+cudaError_t postprocess_launch(const float* __restrict__ cls_input,
                       float *box_input,
-                      const float *dir_input,
-                      float *anchors,
-                      float *anchor_bottom_heights,
+                      const float* __restrict__ dir_input,
+                      const float* __restrict__ anchors,
+                      const float* __restrict__ anchor_bottom_heights,
                       float *bndbox_output,
                       float *score_output,
                       int *object_counter,
@@ -208,7 +211,6 @@ __device__ inline bool intersection(const float2 p1, const float2 p0, const floa
           fmin(q0.y, q1.y) <= fmax(p0.y, p1.y) ) == 0)
         return false;
 
-
     float s1 = cross(q0, p1, p0);
     float s2 = cross(p1, q1, p0);
     float s3 = cross(p0, q1, q0);
@@ -263,7 +265,6 @@ __device__ inline bool devIoU(float const *const box_a, float const *const box_b
     box_a_corners[1] = float2 {a_x2, a_y1};
     box_a_corners[2] = float2 {a_x2, a_y2};
     box_a_corners[3] = float2 {a_x1, a_y2};
-
     box_b_corners[0] = float2 {b_x1, b_y1};
     box_b_corners[1] = float2 {b_x2, b_y1};
     box_b_corners[2] = float2 {b_x2, b_y2};
@@ -305,6 +306,7 @@ __device__ inline bool devIoU(float const *const box_a, float const *const box_b
         }
     }
 
+    if (cnt == 0) return false;
     poly_center.x /= cnt;
     poly_center.y /= cnt;
 
@@ -338,7 +340,7 @@ __device__ inline bool devIoU(float const *const box_a, float const *const box_b
     return iou >= nms_thresh;
 }
 
-__global__ void nms_cuda(const int n_boxes, const float iou_threshold, const float *dev_boxes, uint64_t *dev_mask) {
+__global__ void nms_cuda(const int n_boxes, const float iou_threshold, const float* __restrict__ dev_boxes, uint64_t* __restrict__ dev_mask) {
   const int row_start = blockIdx.y;
   const int col_start = blockIdx.x;
   const int tid = threadIdx.x;
@@ -381,7 +383,7 @@ __global__ void nms_cuda(const int n_boxes, const float iou_threshold, const flo
 }
 
 cudaError_t nms_launch(unsigned int boxes_num,
-               float *boxes,
+               const float* __restrict__ boxes,
                float nms_thresh,
                uint64_t* mask,
                cudaStream_t stream)
@@ -399,39 +401,70 @@ cudaError_t nms_launch(unsigned int boxes_num,
 class PostProcessImplement : public PostProcess {
 public:
     virtual ~PostProcessImplement() {
-        if (bndbox_) checkRuntime(cudaFree(bndbox_));
+        if (workspace_) checkRuntime(cudaFree(workspace_));
         if (h_bndbox_) checkRuntime(cudaFreeHost(h_bndbox_));
-        if (score_) checkRuntime(cudaFree(score_));
-
-        if (anchors_) checkRuntime(cudaFree(anchors_));
-        if (anchor_bottom_heights_) checkRuntime(cudaFree(anchor_bottom_heights_));
-        if (object_counter_) checkRuntime(cudaFree(object_counter_));
-
-        if (h_mask_) checkRuntime(cudaFreeHost(h_mask_));
+        if (nms_mask_h_) checkRuntime(cudaFreeHost(nms_mask_h_));
     }
 
     virtual bool init(const PostProcessParameter& param) {
         param_ = param;
 
         det_num_ = param_.feature_size.x * param_.feature_size.y * param_.num_anchors;
-        checkRuntime(cudaMalloc((void **)&bndbox_, det_num_ * 9 * sizeof(float)));
-        checkRuntime(cudaMallocHost((void **)&h_bndbox_, det_num_ * 9 * sizeof(float)));
-        checkRuntime(cudaMalloc((void **)&score_, det_num_ * sizeof(float)));
 
-        checkRuntime(cudaMalloc((void **)&anchors_, param_.num_anchors * param_.len_per_anchor * sizeof(float)));
-        checkRuntime(cudaMalloc((void **)&anchor_bottom_heights_, param_.num_classes * sizeof(float)));
-        checkRuntime(cudaMalloc((void **)&object_counter_, sizeof(int)));
+        auto align256 = [](size_t s) { return (s + 255) & ~size_t(255); };
+        auto inMB = [](size_t s) { return s / 1024.0 / 1024.0; };
 
+        const size_t bndbox_size  = align256(det_num_ * 9 * sizeof(float));
+        const size_t score_size   = align256(det_num_ * sizeof(float));
+        const size_t anchors_size = align256(param_.num_anchors * param_.len_per_anchor * sizeof(float));
+        const size_t abh_size     = align256(param_.num_classes * sizeof(float));
+        const size_t counter_size = align256(sizeof(int));
+        const size_t workspace_size = bndbox_size + score_size + anchors_size + abh_size + counter_size;
+
+        checkRuntime(cudaMalloc(&workspace_, workspace_size));
+        checkRuntime(cudaMemset(workspace_, 0, workspace_size));
+
+        uint8_t* base           = static_cast<uint8_t*>(workspace_);
+        bndbox_               = reinterpret_cast<float*>(base); 
+        base += bndbox_size;
+        score_                = reinterpret_cast<float*>(base); 
+        base += score_size;
+        anchors_              = reinterpret_cast<float*>(base); 
+        base += anchors_size;
+        anchor_bottom_heights_ = reinterpret_cast<float*>(base); 
+        base += abh_size;
+        object_counter_       = reinterpret_cast<int*>(base);
+
+        std::cout << "Host bndbox buffer size: " << inMB(det_num_ * 9 * sizeof(float)) << " MB" << std::endl;
+
+        checkRuntime(cudaMallocHost(reinterpret_cast<void**>(&h_bndbox_), det_num_ * 9 * sizeof(float)));
+        
         checkRuntime(cudaMemcpy(anchors_, param_.anchors, param_.num_anchors * param_.len_per_anchor * sizeof(float), cudaMemcpyDefault));
         checkRuntime(cudaMemcpy(anchor_bottom_heights_, &param_.anchor_bottom_heights, param_.num_classes * sizeof(float), cudaMemcpyDefault));
 
-        h_mask_size_ = det_num_ * DIVUP(det_num_, NMS_THREADS_PER_BLOCK) * sizeof(uint64_t);
-        checkRuntime(cudaMallocHost((void **)&h_mask_, h_mask_size_));
-
-        int res_blocks = DIVUP(det_num_, NMS_THREADS_PER_BLOCK);
-        remv_ = std::vector<uint64_t>(res_blocks, 0);
-        bndbox_after_nms_.resize(det_num_);
-
+        static constexpr unsigned int NMS_PREINIT_DET = 256u; // preallocate for this many detections post-score-filtering; will grow if needed at runtime, but never shrink
+        const size_t preinit_col_blocks = (NMS_PREINIT_DET + NMS_THREADS_PER_BLOCK - 1) / NMS_THREADS_PER_BLOCK;
+        const size_t preinit_capacity   = NMS_PREINIT_DET * preinit_col_blocks;
+        checkRuntime(cudaHostAlloc(
+            reinterpret_cast<void**>(&nms_mask_h_),
+            preinit_capacity * sizeof(uint64_t), cudaHostAllocMapped));
+        checkRuntime(cudaHostGetDevicePointer(
+            reinterpret_cast<void**>(&nms_mask_d_), nms_mask_h_, 0));
+        nms_mask_capacity_ = preinit_capacity;
+        
+        bndbox_after_nms_.resize(NMS_PREINIT_DET);
+        remv_.reserve(DIVUP(NMS_PREINIT_DET, NMS_THREADS_PER_BLOCK));
+        
+        std::cout << "\nPostProcess Memory Usage (MB) and Addresses:" << std::endl;
+        std::cout << "    bndbox:              " << inMB(bndbox_size) << " MB\t@ " << static_cast<const void*>(bndbox_) << std::endl;
+        std::cout << "    score:               " << inMB(score_size) << " MB\t@ " << static_cast<const void*>(score_) << std::endl;
+        std::cout << "    anchors:             " << inMB(anchors_size) << " MB\t@ " << static_cast<const void*>(anchors_) << std::endl;
+        std::cout << "    anchor_bottom_heights:" << inMB(abh_size) << " MB\t@ " << static_cast<const void*>(anchor_bottom_heights_) << std::endl;
+        std::cout << "    object_counter:      " << inMB(counter_size) << " MB\t@ " << static_cast<const void*>(object_counter_) << std::endl;
+        std::cout << "    WORKSPACE:           " << inMB(workspace_size) << " MB\t@ " << static_cast<const void*>(workspace_) << std::endl;
+        std::cout << "  Host bndbox:           " << inMB(det_num_ * 9 * sizeof(float)) << " MB\t@ " << static_cast<const void*>(h_bndbox_) << std::endl;
+        std::cout << "  NMS mask (host pinned):" << inMB(preinit_capacity * sizeof(uint64_t)) << " MB\t@ " << static_cast<const void*>(nms_mask_h_) << std::endl;
+        
         return true;
     }
 
@@ -439,7 +472,6 @@ public:
         cudaStream_t _stream = static_cast<cudaStream_t>(stream);
 
         checkRuntime(cudaMemsetAsync(object_counter_, 0, sizeof(int), _stream));
-        checkRuntime(cudaMemsetAsync(h_mask_, 0, h_mask_size_, _stream));
 
         checkRuntime(postprocess_launch((float *)cls,
                                         (float *)box,
@@ -465,15 +497,38 @@ public:
         checkRuntime(cudaMemcpyAsync(&bndbox_num_, object_counter_, sizeof(int), cudaMemcpyDeviceToHost, _stream));
         checkRuntime(cudaStreamSynchronize(_stream));
 
+        if (bndbox_num_ == 0) {
+            bndbox_num_after_nms_ = 0;
+            return;
+        }
+
+        const size_t n = static_cast<size_t>(bndbox_num_);
+        const size_t col_blocks = (n + NMS_THREADS_PER_BLOCK - 1) / NMS_THREADS_PER_BLOCK;
+        const size_t needed = n * col_blocks;
+
+        if (needed > nms_mask_capacity_) {
+            if (nms_mask_h_) checkRuntime(cudaFreeHost(nms_mask_h_));
+            checkRuntime(cudaHostAlloc(
+                reinterpret_cast<void**>(&nms_mask_h_),
+                needed * sizeof(uint64_t), cudaHostAllocMapped));
+            checkRuntime(cudaHostGetDevicePointer(
+                reinterpret_cast<void**>(&nms_mask_d_), nms_mask_h_, 0));
+            nms_mask_capacity_ = needed;
+            
+            if (bndbox_after_nms_.size() < static_cast<size_t>(bndbox_num_)) {
+                bndbox_after_nms_.resize(bndbox_num_);
+            }
+        }
+        checkRuntime(cudaMemsetAsync(nms_mask_d_, 0, needed * sizeof(uint64_t), _stream));
+
         thrust::device_ptr<combined_float> thr_bndbox_((combined_float *)bndbox_);
         thrust::stable_sort_by_key(thrust::cuda::par.on(_stream), score_, score_ + bndbox_num_, thr_bndbox_, thrust::greater<float>());
-        checkRuntime(nms_launch(bndbox_num_, bndbox_, param_.nms_thresh, h_mask_, _stream));
+        checkRuntime(nms_launch(bndbox_num_, bndbox_, param_.nms_thresh, nms_mask_d_, _stream));
 
-        checkRuntime(cudaMemcpyAsync(h_bndbox_, bndbox_, bndbox_num_ * 9 * sizeof(float), cudaMemcpyDeviceToHost, _stream));
+        checkRuntime(cudaMemcpyAsync(h_bndbox_, bndbox_, n * 9 * sizeof(float), cudaMemcpyDeviceToHost, _stream));
         checkRuntime(cudaStreamSynchronize(_stream));
 
-        int col_blocks = DIVUP(bndbox_num_, NMS_THREADS_PER_BLOCK);
-        memset(remv_.data(), 0, col_blocks * sizeof(uint64_t));
+        remv_.assign(col_blocks, 0u);
         bndbox_num_after_nms_ = 0;
 
         for (unsigned int i_nms = 0; i_nms < bndbox_num_; i_nms++) {
@@ -481,10 +536,10 @@ public:
             unsigned int inblock = i_nms % NMS_THREADS_PER_BLOCK;
 
             if (!(remv_[nblock] & (1ULL << inblock))) {
-                bndbox_after_nms_[bndbox_num_after_nms_] = *(BoundingBox*)(&h_bndbox_[i_nms * 9]);
+                std::memcpy(&bndbox_after_nms_[bndbox_num_after_nms_], &h_bndbox_[i_nms * 9], sizeof(BoundingBox));
                 bndbox_num_after_nms_++;
-                uint64_t* p = h_mask_ + i_nms * col_blocks;
-                for (int j_nms = nblock; j_nms < col_blocks; j_nms++) {
+                const uint64_t* p = nms_mask_h_ + i_nms * col_blocks;
+                for (size_t j_nms = nblock; j_nms < col_blocks; j_nms++) {
                     remv_[j_nms] |= p[j_nms];
                 }
             }
@@ -497,21 +552,23 @@ public:
 
 private:
     PostProcessParameter param_;
-    float *anchors_;
-    float *anchor_bottom_heights_;
-    int *object_counter_;
+    void*        workspace_            = nullptr;
+    float       *anchors_              = nullptr;
+    float       *anchor_bottom_heights_ = nullptr;
+    int         *object_counter_       = nullptr;
 
-    float *bndbox_ = nullptr;
-    float *h_bndbox_ = nullptr;
-    float *score_ = nullptr;
-    unsigned int det_num_ = 0;
+    float       *bndbox_   = nullptr;
+    float       *h_bndbox_ = nullptr;
+    float       *score_    = nullptr;
+    unsigned int det_num_  = 0;
 
-    uint64_t* h_mask_ = nullptr;
-    unsigned int h_mask_size_ = 0;
-    std::vector<uint64_t> remv_;
+    uint64_t *nms_mask_h_ = nullptr;
+    uint64_t *nms_mask_d_ = nullptr;
+    size_t nms_mask_capacity_ = 0;
 
     unsigned int bndbox_num_ = 0;
-    std::vector<BoundingBox> bndbox_after_nms_;
+    std::vector<BoundingBox> bndbox_after_nms_; 
+    std::vector<uint64_t>    remv_;
     unsigned int bndbox_num_after_nms_ = 0;
 };
 

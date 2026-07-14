@@ -36,7 +36,6 @@ class CoreImplement: public Core {
 public:
     virtual ~CoreImplement() {
         if (lidar_points_device_) checkRuntime(cudaFree(lidar_points_device_));
-        if (lidar_points_host_) checkRuntime(cudaFreeHost(lidar_points_host_));
     }
 
     bool init(const CoreParameter& param) {
@@ -46,11 +45,17 @@ public:
             return false;
         }
 
+        checkRuntime(cudaDeviceSynchronize());
+        printf("Loaded lidar voxelization.\n");
+
         lidar_backbone_ = create_backbone(param.lidar_model);
             if (lidar_backbone_ == nullptr) {
             printf("Failed to create lidar backbone & head.\n");
             return false;
         }
+
+        checkRuntime(cudaDeviceSynchronize());
+        printf("Loaded lidar backbone & head.\n");
 
         lidar_postprocess_ = create_postprocess(param.lidar_post);
         if (lidar_postprocess_ == nullptr) {
@@ -58,12 +63,11 @@ public:
             return false;
         }
 
-        res_.reserve(100);
+        printf("Loaded lidar postprocess.\n");
 
-        capacity_points_ = 300000;
+        capacity_points_ = static_cast<size_t>(param.voxelization.max_points);
         bytes_capacity_points_ = capacity_points_ * param.voxelization.num_feature * sizeof(float);
         checkRuntime(cudaMalloc(&lidar_points_device_, bytes_capacity_points_));
-        checkRuntime(cudaMallocHost(&lidar_points_host_, bytes_capacity_points_));
         param_ = param;
         return true;
     }
@@ -78,8 +82,7 @@ public:
 
         cudaStream_t _stream = static_cast<cudaStream_t>(stream);
         size_t bytes_points = num_points * param_.voxelization.num_feature * sizeof(float);
-        checkRuntime(cudaMemcpyAsync(lidar_points_host_, lidar_points, bytes_points, cudaMemcpyHostToHost, _stream));
-        checkRuntime(cudaMemcpyAsync(lidar_points_device_, lidar_points_host_, bytes_points, cudaMemcpyHostToDevice, _stream));
+        checkRuntime(cudaMemcpyAsync(lidar_points_device_, lidar_points, bytes_points, cudaMemcpyDefault, _stream));
 
         this->lidar_voxelization_->forward(lidar_points_device_, num_points, _stream);
         this->lidar_backbone_->forward(this->lidar_voxelization_->features(), this->lidar_voxelization_->coords(), this->lidar_voxelization_->params(), _stream);
@@ -102,8 +105,7 @@ public:
         timer_.start(_stream);
 
         size_t bytes_points = num_points * param_.voxelization.num_feature * sizeof(float);
-        checkRuntime(cudaMemcpyAsync(lidar_points_host_, lidar_points, bytes_points, cudaMemcpyHostToHost, _stream));
-        checkRuntime(cudaMemcpyAsync(lidar_points_device_, lidar_points_host_, bytes_points, cudaMemcpyHostToDevice, _stream));
+        checkRuntime(cudaMemcpyAsync(lidar_points_device_, lidar_points, bytes_points, cudaMemcpyDefault, _stream));
         timer_.stop("[NoSt] CopyLidar");
 
         timer_.start(_stream);
@@ -142,7 +144,6 @@ private:
     CoreParameter param_;
     nv::EventTimer timer_;
     float* lidar_points_device_ = nullptr;
-    float* lidar_points_host_ = nullptr;
     size_t capacity_points_ = 0;
     size_t bytes_capacity_points_ = 0;
 
@@ -151,8 +152,6 @@ private:
     std::shared_ptr<PostProcess> lidar_postprocess_;
 
     bool enable_timer_ = false;
-
-    std::vector<BoundingBox> res_;
 };
 
 std::shared_ptr<Core> create_core(const CoreParameter& param) {
