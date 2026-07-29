@@ -538,9 +538,9 @@ public:
             return;
         }
 
-        const size_t n = static_cast<size_t>(bndbox_num_);
-        const size_t col_blocks = (n + NMS_THREADS_PER_BLOCK - 1) / NMS_THREADS_PER_BLOCK;
-        const size_t needed = n * col_blocks;
+        const size_t bndbox_num = static_cast<size_t>(bndbox_num_);
+        const size_t col_blocks = (bndbox_num + NMS_THREADS_PER_BLOCK - 1) / NMS_THREADS_PER_BLOCK;
+        const size_t needed = bndbox_num * col_blocks;
 
         if (needed > nms_mask_capacity_) {
             if (nms_mask_h_) checkRuntime(cudaFreeHost(nms_mask_h_));
@@ -561,7 +561,7 @@ public:
         thrust::stable_sort_by_key(thrust::cuda::par.on(_stream), score_, score_ + bndbox_num_, thr_bndbox_, thrust::greater<float>());
         checkRuntime(nms_launch(bndbox_num_, bndbox_, param_.nms_thresh, nms_mask_d_, _stream));
 
-        checkRuntime(cudaMemcpyAsync(h_bndbox_, bndbox_, n * 9 * sizeof(float), cudaMemcpyDeviceToHost, _stream));
+        checkRuntime(cudaMemcpyAsync(h_bndbox_, bndbox_, bndbox_num * 9 * sizeof(float), cudaMemcpyDeviceToHost, _stream));
         checkRuntime(cudaStreamSynchronize(_stream));
 
         remv_.assign(col_blocks, 0u);
