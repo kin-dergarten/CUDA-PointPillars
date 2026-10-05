@@ -106,8 +106,15 @@ static __global__ void generateBaseFeatures_kernel(unsigned int *mask, const flo
   if( !(count>0) ) return;
   count = count<POINTS_PER_VOXEL?count:POINTS_PER_VOXEL;
 
-  unsigned int current_pillarId = 0;
-  current_pillarId = atomicAdd(pillar_num, 1);
+  unsigned int current_pillarId = atomicAdd(pillar_num, 0);
+  while (current_pillarId < max_voxels) {
+    unsigned int previous_pillarId =
+        atomicCAS(pillar_num, current_pillarId, current_pillarId + 1);
+    if (previous_pillarId == current_pillarId) {
+      break;
+    }
+    current_pillarId = previous_pillarId;
+  }
   if (current_pillarId >= max_voxels) {
     atomicExch(mask + voxel_index, 0);
     return;
