@@ -90,7 +90,6 @@ cudaError_t generateVoxels_random_launch(const float* __restrict__ points, size_
 static __global__ void generateBaseFeatures_kernel(unsigned int *mask, const float* __restrict__ voxels,
         int grid_y_size, int grid_x_size,
         unsigned int *pillar_num,
-        unsigned int max_voxels,
         float *voxel_features,
         unsigned int *voxel_num,
         unsigned int *voxel_idxs)
@@ -106,19 +105,8 @@ static __global__ void generateBaseFeatures_kernel(unsigned int *mask, const flo
   if( !(count>0) ) return;
   count = count<POINTS_PER_VOXEL?count:POINTS_PER_VOXEL;
 
-  unsigned int current_pillarId = atomicAdd(pillar_num, 0);
-  while (current_pillarId < max_voxels) {
-    unsigned int previous_pillarId =
-        atomicCAS(pillar_num, current_pillarId, current_pillarId + 1);
-    if (previous_pillarId == current_pillarId) {
-      break;
-    }
-    current_pillarId = previous_pillarId;
-  }
-  if (current_pillarId >= max_voxels) {
-    atomicExch(mask + voxel_index, 0);
-    return;
-  }
+  unsigned int current_pillarId = 0;
+  current_pillarId = atomicAdd(pillar_num, 1);
 
   voxel_num[current_pillarId] = count;
 
@@ -139,7 +127,6 @@ static __global__ void generateBaseFeatures_kernel(unsigned int *mask, const flo
 cudaError_t generateBaseFeatures_launch(unsigned int *mask, float *voxels,
         int grid_y_size, int grid_x_size,
         unsigned int *pillar_num,
-        unsigned int max_voxels,
         float *voxel_features,
         unsigned int *voxel_num,
         unsigned int *voxel_idxs,
@@ -152,7 +139,6 @@ cudaError_t generateBaseFeatures_launch(unsigned int *mask, float *voxels,
   generateBaseFeatures_kernel<<<blocks, threads, 0, stream>>>
       (mask, voxels, grid_y_size, grid_x_size,
        pillar_num,
-       max_voxels,
        voxel_features,
        voxel_num,
        voxel_idxs);
@@ -164,7 +150,6 @@ cudaError_t generateBaseFeatures_launch(unsigned int *mask, float *voxels,
 static __global__ void generateFeatures_kernel(const float* __restrict__ voxel_features,
     const unsigned int* __restrict__ voxel_num, const unsigned int* __restrict__ voxel_idxs,
     const unsigned int* __restrict__ params,
-    unsigned int max_voxels,
     float voxel_x, float voxel_y, float voxel_z,
     float range_min_x, float range_min_y, float range_min_z,
     half* features)
@@ -173,7 +158,7 @@ static __global__ void generateFeatures_kernel(const float* __restrict__ voxel_f
     int point_idx = threadIdx.x % WARP_SIZE;
 
     int pillar_idx_inBlock = threadIdx.x/WARP_SIZE;
-    unsigned int num_pillars = params[0] < max_voxels ? params[0] : max_voxels;
+    unsigned int num_pillars = params[0];
 
     if (pillar_idx >= num_pillars) return;
 
@@ -289,7 +274,6 @@ cudaError_t generateFeatures_launch(const float* __restrict__ voxel_features,
       voxel_num,
       voxel_idxs,
       params,
-      max_voxels,
       voxel_x, voxel_y, voxel_z,
       range_min_x, range_min_y, range_min_z,
       (half *)features);
@@ -375,7 +359,6 @@ class VoxelizationImplement : public Voxelization {
         checkRuntime(generateBaseFeatures_launch(mask_, voxels_,
                     param_.grid_size.y, param_.grid_size.x,
                     params_input_,
-                    param_.max_voxels,
                     voxel_features_,
                     voxel_num_,
                     voxel_idxs_, _stream));
