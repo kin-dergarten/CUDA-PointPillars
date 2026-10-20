@@ -13,8 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 2.8.7)
+cmake_minimum_required(VERSION 3.1)
 project(pointpillar)
+if(NOT CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 14)
+endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_BUILD_PYTHON $ENV{USE_Python})
 set(CMAKE_BUILD_TYPE "Release")
 # set(CMAKE_BUILD_TYPE "Debug")
@@ -22,13 +27,14 @@ set(arch ${CMAKE_HOST_SYSTEM_PROCESSOR})
 
 find_package(CUDA REQUIRED)
 
-set(CMAKE_CXX_FLAGS_RELEASE "-std=c++14 -Wextra -Wall -Wno-missing-field-initializers -Wno-deprecated-declarations -O3")
-set(CMAKE_CXX_FLAGS_DEBUG   "-std=c++14 -O0 -g")
+set(CMAKE_CXX_FLAGS_RELEASE "-Wextra -Wall -Wno-missing-field-initializers -Wno-deprecated-declarations -O3")
+set(CMAKE_CXX_FLAGS_DEBUG   "-O0 -g")
 
-set(CUDA_NVCC_FLAGS_RELEASE "-Werror=all-warnings -Xcompiler -std=c++14,-Wextra,-Wall,-Wno-deprecated-declarations,-O3")
-set(CUDA_NVCC_FLAGS_DEBUG   "-std=c++14 -O0 -g")
+set(CUDA_NVCC_FLAGS_RELEASE "-Werror=all-warnings -Xcompiler -Wextra,-Wall,-Wno-deprecated-declarations,-O3")
+set(CUDA_NVCC_FLAGS_DEBUG   "-O0 -g")
 
 set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} 
+    --std=c++${CMAKE_CXX_STANDARD}
     -gencode arch=compute_$ENV{CUDASM},code=compute_$ENV{CUDASM}
 )
 

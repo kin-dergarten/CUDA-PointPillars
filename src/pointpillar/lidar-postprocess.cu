@@ -572,7 +572,13 @@ public:
             unsigned int inblock = i_nms % NMS_THREADS_PER_BLOCK;
 
             if (!(remv_[nblock] & (1ULL << inblock))) {
-                std::memcpy(&bndbox_after_nms_[bndbox_num_after_nms_], &h_bndbox_[i_nms * 9], sizeof(BoundingBox));
+                const float* detection = &h_bndbox_[i_nms * DET_CHANNEL];
+                int class_id;
+                std::memcpy(&class_id, &detection[7], sizeof(class_id));
+                bndbox_after_nms_[bndbox_num_after_nms_] = BoundingBox(
+                    detection[0], detection[1], detection[2], detection[3],
+                    detection[4], detection[5], detection[6], class_id,
+                    detection[8]);
                 bndbox_num_after_nms_++;
                 const uint64_t* p = nms_mask_h_ + i_nms * col_blocks;
                 for (size_t j_nms = nblock; j_nms < col_blocks; j_nms++) {
