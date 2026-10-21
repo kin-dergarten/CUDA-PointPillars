@@ -13,23 +13,51 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 2.8.7)
+cmake_minimum_required(VERSION 3.1)
 project(pointpillar)
 set(CMAKE_BUILD_PYTHON $ENV{USE_Python})
 set(CMAKE_BUILD_TYPE "Release")
 # set(CMAKE_BUILD_TYPE "Debug")
 set(arch ${CMAKE_HOST_SYSTEM_PROCESSOR})
 
+set(POINTPILLAR_TARGET "auto" CACHE STRING "Jetson target: tx2nx, orinnx, or auto")
+set_property(CACHE POINTPILLAR_TARGET PROPERTY STRINGS auto tx2nx orinnx)
+if(POINTPILLAR_TARGET STREQUAL "tx2nx")
+    set(POINTPILLAR_CUDA_ARCH 62)
+elseif(POINTPILLAR_TARGET STREQUAL "orinnx")
+    set(POINTPILLAR_CUDA_ARCH 87)
+elseif(POINTPILLAR_TARGET STREQUAL "auto")
+    if(NOT "$ENV{CUDASM}" STREQUAL "")
+        set(POINTPILLAR_CUDA_ARCH "$ENV{CUDASM}")
+    else()
+        message(FATAL_ERROR "Set CUDASM or configure with -DPOINTPILLAR_TARGET=tx2nx|orinnx")
+    endif()
+else()
+    message(FATAL_ERROR "Unsupported POINTPILLAR_TARGET '${POINTPILLAR_TARGET}'; use tx2nx, orinnx, or auto")
+endif()
+
+if(NOT CMAKE_CXX_STANDARD)
+    if(POINTPILLAR_TARGET STREQUAL "orinnx" OR
+       (POINTPILLAR_TARGET STREQUAL "auto" AND POINTPILLAR_CUDA_ARCH STREQUAL "87"))
+        set(CMAKE_CXX_STANDARD 17)
+    else()
+        set(CMAKE_CXX_STANDARD 14)
+    endif()
+endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 find_package(CUDA REQUIRED)
 
-set(CMAKE_CXX_FLAGS_RELEASE "-std=c++14 -Wextra -Wall -Wno-missing-field-initializers -Wno-deprecated-declarations -O3")
-set(CMAKE_CXX_FLAGS_DEBUG   "-std=c++14 -O0 -g")
+set(CMAKE_CXX_FLAGS_RELEASE "-Wextra -Wall -Wno-missing-field-initializers -Wno-deprecated-declarations -O3")
+set(CMAKE_CXX_FLAGS_DEBUG   "-O0 -g")
 
-set(CUDA_NVCC_FLAGS_RELEASE "-Werror=all-warnings -Xcompiler -std=c++14,-Wextra,-Wall,-Wno-deprecated-declarations,-O3")
-set(CUDA_NVCC_FLAGS_DEBUG   "-std=c++14 -O0 -g")
+set(CUDA_NVCC_FLAGS_RELEASE "-Werror=all-warnings -Xcompiler -Wextra,-Wall,-Wno-deprecated-declarations,-O3")
+set(CUDA_NVCC_FLAGS_DEBUG   "-O0 -g")
 
 set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} 
-    -gencode arch=compute_$ENV{CUDASM},code=compute_$ENV{CUDASM}
+    --std=c++${CMAKE_CXX_STANDARD}
+    -gencode arch=compute_${POINTPILLAR_CUDA_ARCH},code=compute_${POINTPILLAR_CUDA_ARCH}
 )
 
 include_directories(

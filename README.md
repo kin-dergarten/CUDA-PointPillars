@@ -36,7 +36,9 @@ sh tool/evaluate_kitti_val.sh
 
 ### Setup Runtime Environment
 
-- Nvidia Jetson Orin + CUDA 11.4 + cuDNN 8.9.0 + TensorRT 8.6.11
+Build on the target Jetson with its matching CUDA and TensorRT development packages. TX2 NX uses TensorRT 7, SM62, and C++14; Orin NX uses TensorRT 10, SM87, and C++17. TensorRT engines are specific to their target runtime and are not interchangeable.
+
+`tool/environment.sh` defaults to CUDA 11.4 for existing builds. Set `CUDA_HOME` and, when needed, `CUDA_Inc`, `CUDA_Lib`, `CUDA_Bin`, and the `TensorRT_*` paths before sourcing it to use another installed toolchain.
 
 ## Compile && Run
 
@@ -45,7 +47,8 @@ sudo apt-get install git-lfs && git lfs install
 git clone https://github.com/NVIDIA-AI-IOT/CUDA-PointPillars.git
 cd CUDA-PointPillars && . tool/environment.sh
 mkdir build && cd build
-cmake .. && make -j$(nproc)
+cmake .. -DPOINTPILLAR_TARGET=tx2nx && make -j$(nproc)
+# Use -DPOINTPILLAR_TARGET=orinnx instead for Orin NX
 cd ../ && sh tool/build_trt_engine.sh
 cd build && ./pointpillar ../data/ ../data/ --timer
 ```

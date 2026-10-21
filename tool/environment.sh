@@ -22,14 +22,14 @@
 
 # export CUDA_VISIBLE_DEVICES=2
 
-export TensorRT_Lib=/lib/aarch64-linux-gnu/
-export TensorRT_Inc=/usr/include/aarch64-linux-gnu/
-export TensorRT_Bin=/usr/src/tensorrt/bin/
+export TensorRT_Lib=${TensorRT_Lib:-/lib/aarch64-linux-gnu/}
+export TensorRT_Inc=${TensorRT_Inc:-/usr/include/aarch64-linux-gnu/}
+export TensorRT_Bin=${TensorRT_Bin:-/usr/src/tensorrt/bin/}
 
-export CUDA_Lib=/usr/local/cuda-11.4/targets/aarch64-linux/lib/
-export CUDA_Inc=/usr/local/cuda-11.4/targets/aarch64-linux/include/
-export CUDA_Bin=/usr/local/cuda-11.4/bin/
-export CUDA_HOME=/usr/local/cuda-11.4/
+export CUDA_HOME=${CUDA_HOME:-/usr/local/cuda-11.4}
+export CUDA_Lib=${CUDA_Lib:-$CUDA_HOME/targets/aarch64-linux/lib/}
+export CUDA_Inc=${CUDA_Inc:-$CUDA_HOME/targets/aarch64-linux/include/}
+export CUDA_Bin=${CUDA_Bin:-$CUDA_HOME/bin/}
 
 export CUDNN_Lib=/lib/aarch64-linux-gnu/
 
